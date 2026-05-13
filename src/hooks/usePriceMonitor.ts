@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchBinanceKlines, calculateEMA } from '@/lib/binance';
+
 import toast from 'react-hot-toast';
+import { ipcService, sendDesktopNotification } from '../lib/ipc-service';
+import { calculateEMA, fetchBinanceKlines } from '../lib/binance';
 
 export function usePriceMonitor() {
   const [config, setConfig] = useState<any>(null);
@@ -11,8 +13,7 @@ export function usePriceMonitor() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
-    fetch('/api/config')
-      .then(res => res.json())
+    ipcService.getConfig()
       .then(data => {
         if (data.success) {
           setConfig(data.config);
@@ -40,11 +41,12 @@ export function usePriceMonitor() {
     
     setLastTriggerTimes(prev => ({ ...prev, [pair]: now }));
 
-    // Desktop Notification (OS)
-    if (config?.desktopNotificationsEnabled && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-      new Notification(`Price Alert: ${pair}`, {
-        body: `Price ${price} dropped below ${ema.toFixed(2)} (Threshold: ${config.dropThreshold}%)`,
-      });
+    // Desktop Notification (OS via Web Notifications API)
+    if (config?.desktopNotificationsEnabled) {
+      sendDesktopNotification(
+        `Price Alert: ${pair}`,
+        `Price ${price.toFixed(2)} dropped below EMA ${ema.toFixed(2)} (Threshold: ${config.dropThreshold}%)`
+      );
     }
 
     // UI Notification (Toast)
@@ -57,12 +59,7 @@ export function usePriceMonitor() {
 
     // Call API Trigger (Telegram + CoinDCX)
     try {
-      const res = await fetch('/api/trigger', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ price, ema, pair }),
-      });
-      const data = await res.json();
+      const data = await ipcService.triggerAlert({ price, ema, pair });
       console.log(`Trigger API response for ${pair}:`, data);
 
       if (data.success) {

@@ -1,11 +1,11 @@
-"use client";
 import { useState, useEffect } from 'react';
 import { Save, AlertCircle, Trash2 } from 'lucide-react';
+import { ipcService } from '../lib/ipc-service';
 
 const AVAILABLE_PAIRS = ['BTC', 'XAG', 'PAXG', 'XRP'];
 
 export default function ConfigPage() {
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<any>({
     pairs: [],
     emaPeriod: 15,
     dropThreshold: 1,
@@ -20,12 +20,11 @@ export default function ConfigPage() {
   const [status, setStatus] = useState({ loading: true, saving: false, message: '' });
 
   useEffect(() => {
-    fetch('/api/config')
-      .then(res => res.json())
+    ipcService.getConfig()
       .then(data => {
         if (data.success && data.config) {
           const loadedPairs = data.config.pairs || (data.config.pair ? [data.config.pair.replace('USDT', '')] : ['BTC']);
-          setFormData(prev => ({ 
+          setFormData((prev: any) => ({ 
             ...prev, 
             ...data.config, 
             pairs: loadedPairs,
@@ -33,7 +32,8 @@ export default function ConfigPage() {
           }));
         }
         setStatus(s => ({ ...s, loading: false }));
-      });
+      })
+      .catch(() => setStatus(s => ({ ...s, loading: false })));
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -41,16 +41,16 @@ export default function ConfigPage() {
     
     if (type === 'checkbox') {
       const target = e.target as HTMLInputElement;
-      setFormData(prev => ({ ...prev, [name]: target.checked }));
+      setFormData((prev: any) => ({ ...prev, [name]: target.checked }));
     } else if (type === 'number') {
-      setFormData(prev => ({ ...prev, [name]: parseFloat(value) }));
+      setFormData((prev: any) => ({ ...prev, [name]: parseFloat(value) }));
     } else {
-      setFormData(prev => ({ ...prev, [name]: value }));
+      setFormData((prev: any) => ({ ...prev, [name]: value }));
     }
   };
 
   const handlePairToggle = (pair: string) => {
-    setFormData(prev => {
+    setFormData((prev: any) => {
       const currentPairs = [...prev.pairs];
       if (currentPairs.includes(pair)) {
         return { ...prev, pairs: currentPairs.filter(p => p !== pair) };
@@ -65,17 +65,12 @@ export default function ConfigPage() {
     setStatus(s => ({ ...s, saving: true, message: '' }));
     
     try {
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
-      });
-      const data = await res.json();
+      const data = await ipcService.saveConfig(formData);
       
       if (data.success) {
         setStatus(s => ({ ...s, saving: false, message: 'Configuration saved successfully!' }));
       } else {
-        setStatus(s => ({ ...s, saving: false, message: 'Failed to save configuration.' }));
+        setStatus(s => ({ ...s, saving: false, message: `Failed to save: ${data?.error || 'Unknown error. Check terminal for details.'}` }));
       }
     } catch (err) {
       setStatus(s => ({ ...s, saving: false, message: 'An error occurred while saving.' }));
@@ -87,8 +82,18 @@ export default function ConfigPage() {
     
     setStatus(s => ({ ...s, saving: true, message: '' }));
     try {
-      const res = await fetch('/api/config', { method: 'DELETE' });
-      const data = await res.json();
+      const data = await ipcService.saveConfig({
+        pairs: [],
+        emaPeriod: 15,
+        dropThreshold: 1,
+        autoOrderEnabled: false,
+        telegramEnabled: false,
+        desktopNotificationsEnabled: false,
+        orderPercentage: 25,
+        leverage: 1.0,
+        quoteCurrencies: ['USDT'],
+        telegramChatId: ''
+      });
       
       if (data.success) {
         setFormData({
@@ -198,12 +203,12 @@ export default function ConfigPage() {
                             onChange={(e) => {
                               const checked = e.target.checked;
                               const val = e.target.value;
-                              setFormData(prev => {
+                              setFormData((prev: any) => {
                                 const current = prev.quoteCurrencies || [];
                                 if (checked) {
                                   return { ...prev, quoteCurrencies: [...current, val] };
                                 } else {
-                                  return { ...prev, quoteCurrencies: current.filter(c => c !== val) };
+                                  return { ...prev, quoteCurrencies: current.filter((c: any) => c !== val) };
                                 }
                               });
                             }}

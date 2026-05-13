@@ -1,12 +1,12 @@
-"use client";
 import { useState, useEffect } from 'react';
-import { usePriceMonitor } from '@/hooks/usePriceMonitor';
+import { usePriceMonitor } from '../hooks/usePriceMonitor';
 import { Activity, TrendingDown, Wallet, BarChart3, Eye, EyeOff, Zap, PackageOpen, Target } from 'lucide-react';
-import Link from 'next/link';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { ipcService } from '../lib/ipc-service';
 
 export default function Home() {
-  const { config, currentPrices, currentEmas, status, lastUpdated, requestNotificationPermission } = usePriceMonitor();
+  const { config, currentPrices, currentEmas, status, lastUpdated } = usePriceMonitor();
   const [balances, setBalances] = useState<{ USDT: number; INR: number } | null>(null);
   const [positions, setPositions] = useState<any[]>([]);
   const [loadingPositions, setLoadingPositions] = useState(true);
@@ -27,40 +27,18 @@ export default function Home() {
   });
   const [placingOrder, setPlacingOrder] = useState(false);
   const [availableAssets, setAvailableAssets] = useState<string[]>(['BTC', 'XAG']); // Default fallback
-  const [assetSearch, setAssetSearch] = useState('');
   const [selectedMarketPrice, setSelectedMarketPrice] = useState<number | null>(null);
-
-  const testMockNotification = () => {
-    // 1. OS Notification
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      if (Notification.permission === 'granted') {
-        new Notification("Mock Price Alert: BTCUSDT", {
-          body: "This is a test notification. Price dropped below EMA!",
-        });
-      } else {
-        toast.error("OS Notifications not enabled. Please click 'Enable Notifications' first.");
-      }
-    }
-
-    // 2. UI Toast
-    toast.success("UI Mock Alert: BTC Price dropped!", {
-      icon: '🚀',
-      duration: 4000
-    });
-  };
 
   useEffect(() => {
     // Clear old price while loading new one
     setSelectedMarketPrice(null);
     
-    // Fetch currently selected asset price periodically
     const fetchSelectedPrice = async () => {
       try {
-        const market = `B-${tradeForm.asset}_${tradeForm.quoteCurrency}`;
-        const res = await fetch(`/api/price?market=${market}`);
-        const data = await res.json();
+        const symbol = `${tradeForm.asset}${tradeForm.quoteCurrency}`;
+        const data = await ipcService.getPrice(symbol);
         if (data.success) {
-          console.log(`Updated price for ${market}: ${data.price}`);
+          console.log(`Updated price for ${symbol}: ${data.price}`);
           setSelectedMarketPrice(data.price);
         }
       } catch (e) {
@@ -95,34 +73,23 @@ export default function Home() {
     toast.loading('Placing order...', { id: 'place-order' });
 
     try {
-      const res = await fetch('/api/orders/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          asset: tradeForm.asset,
-          quoteCurrency: tradeForm.quoteCurrency,
-          side: tradeForm.side,
-          orderType: tradeForm.orderType,
-          price: Number(tradeForm.price),
-          quantity: tradeForm.usePercentage ? 0 : Number(tradeForm.quantity),
-          percentage: tradeForm.usePercentage ? Number(tradeForm.percentage) : 0,
-          leverage: Number(tradeForm.leverage)
-        }),
+      const data = await ipcService.placeOrder({
+        asset: tradeForm.asset,
+        quoteCurrency: tradeForm.quoteCurrency,
+        side: tradeForm.side,
+        orderType: tradeForm.orderType,
+        price: Number(tradeForm.price),
+        quantity: tradeForm.usePercentage ? 0 : Number(tradeForm.quantity),
+        percentage: tradeForm.usePercentage ? Number(tradeForm.percentage) : 0,
+        leverage: Number(tradeForm.leverage)
       });
-      const data = await res.json();
       
       if (data.success) {
         toast.success('Order placed successfully!', { id: 'place-order' });
-        // Reset form partially
         setTradeForm(prev => ({ ...prev, quantity: '', price: '', percentage: '0' }));
-        // Refresh positions
-        fetch('/api/positions')
-          .then(res => res.json())
-          .then(data => data.success && setPositions(data.positions));
-        // Refresh balances
-        fetch('/api/balance')
-          .then(res => res.json())
-          .then(data => data.success && setBalances(data.balances));
+        // Refresh
+        ipcService.getPositions().then(d => d.success && setPositions(d.positions));
+        ipcService.getBalance().then(d => d.success && setBalances(d.balances));
       } else {
         toast.error(`Failed: ${JSON.stringify(data.error)}`, { id: 'place-order' });
       }
@@ -142,24 +109,16 @@ export default function Home() {
     toast.loading('Closing position...', { id: 'close-pos' });
     
     try {
-      const res = await fetch('/api/positions/close', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pair: pos.pair,
-          side: side,
-          quantity: quantity,
-          marginCurrency: pos.margin_currency_short_name
-        }),
+      const data = await ipcService.closePosition({
+        pair: pos.pair,
+        side: side,
+        quantity: quantity,
+        marginCurrency: pos.margin_currency_short_name
       });
-      const data = await res.json();
       
       if (data.success) {
         toast.success('Position closed successfully!', { id: 'close-pos' });
-        // Refresh positions
-        fetch('/api/positions')
-          .then(res => res.json())
-          .then(data => data.success && setPositions(data.positions));
+        ipcService.getPositions().then(d => d.success && setPositions(d.positions));
       } else {
         toast.error(`Failed to close: ${JSON.stringify(data.error)}`, { id: 'close-pos' });
       }
@@ -180,20 +139,15 @@ export default function Home() {
     try {
       const side = (parseFloat(pos.active_pos) || 0) >= 0 ? 'BUY' : 'SELL';
       const quantity = Math.abs(parseFloat(pos.active_pos) || 0);
-      const res = await fetch('/api/positions/tpsl', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pair: pos.pair,
-          side,
-          quantity,
-          leverage: parseFloat(pos.leverage) || 1,
-          marginCurrency: pos.margin_currency_short_name,
-          takeProfit: takeProfit ? Number(takeProfit) : null,
-          stopLoss: stopLoss ? Number(stopLoss) : null,
-        }),
+      const data = await ipcService.setTpSl({
+        pair: pos.pair,
+        side,
+        quantity,
+        leverage: parseFloat(pos.leverage) || 1,
+        marginCurrency: pos.margin_currency_short_name,
+        takeProfitPrice: takeProfit ? Number(takeProfit) : null,
+        stopLossPrice: stopLoss ? Number(stopLoss) : null,
       });
-      const data = await res.json();
       if (data.success) {
         toast.success('TP/SL orders placed successfully!', { id: 'tpsl' });
         setTpSlModal(null);
@@ -208,8 +162,7 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetch('/api/balance')
-      .then(res => res.json())
+    ipcService.getBalance()
       .then(data => {
         if (data.success) {
           setBalances(data.balances);
@@ -217,8 +170,7 @@ export default function Home() {
       })
       .catch(err => console.error("Failed to fetch balances", err));
 
-    fetch('/api/positions')
-      .then(res => res.json())
+    ipcService.getPositions()
       .then(data => {
         if (data.success) {
           setPositions(data.positions);
@@ -230,11 +182,10 @@ export default function Home() {
         setLoadingPositions(false);
       });
 
-    fetch('/api/assets')
-      .then(res => res.json())
-      .then(data => {
-        if (data.success && data.assets.length > 0) {
-          setAvailableAssets(data.assets);
+    ipcService.getAssets()
+      .then(assets => {
+        if (assets && assets.length > 0) {
+          setAvailableAssets(assets);
         }
       })
       .catch(err => console.error("Failed to fetch assets", err));
@@ -246,7 +197,7 @@ export default function Home() {
       {/* TP/SL Modal */}
       {tpSlModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="glass-panel p-6 w-full max-w-md mx-4 space-y-4">
+          <div className="glass-panel p-6 w-full max-md mx-4 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold flex items-center gap-2">
                 <Target size={18} className="text-amber-400" />
@@ -754,7 +705,7 @@ export default function Home() {
               </div>
             </div>
             <div className="mt-6">
-              <Link href="/config">
+              <Link to="/config">
                 <button className="btn-primary w-full md:w-auto">Edit Configuration</button>
               </Link>
             </div>
